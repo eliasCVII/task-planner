@@ -1,0 +1,122 @@
+# Task Manager Configuration File
+# Copy this file to 'plan.conf' and customize as needed
+# Format: key: value
+# Lines starting with # or ; are comments
+
+#==============================================================================
+# CORE SETTINGS
+#==============================================================================
+
+# Data Directory
+# Where to store task data files
+# Examples:
+#   data-dir: data                    # Relative to executable (default)
+#   data-dir: /home/user/tasks        # Absolute path
+#   data-dir: ~/my-tasks              # Home directory
+#   data-dir: /tmp/work-schedule      # Temporary directory
+data-dir: data
+
+# Default Day Length
+# Working hours per day in decimal format
+# Examples:
+#   default-day-length: 7.0           # 7 hours (default)
+#   default-day-length: 8.5           # 8 hours 30 minutes
+#   default-day-length: 6.25          # 6 hours 15 minutes
+#   default-day-length: 10.0          # 10 hours
+default-day-length: 7.0
+
+# Date Format
+# File naming format (currently only YYYY-MM-DD supported)
+date-format: YYYY-MM-DD
+
+#==============================================================================
+# UI AND BEHAVIOR SETTINGS
+#==============================================================================
+
+# Auto Save
+# Automatically save when exiting interactive mode
+# Values: true, false, yes, no, 1, 0, on, off
+auto-save: true
+
+# Show Warnings
+# Display calculation warnings and time conflicts
+# Values: true, false, yes, no, 1, 0, on, off
+show-warnings: true
+
+# Default Start Time
+# Default start time for flexible tasks (24-hour format)
+# Examples:
+#   default-start-time: 09:00         # 9:00 AM (default)
+#   default-start-time: 08:30         # 8:30 AM
+#   default-start-time: 07:00         # 7:00 AM
+default-start-time: 09:00
+
+# Time Format
+# Display format for times (currently only 24h supported)
+# Values: 24h, 12h
+time-format: 24h
+
+#==============================================================================
+# FILE SETTINGS
+#==============================================================================
+
+# File Extension
+# Extension for data files (content is always JSON)
+# Examples:
+#   file-extension: .json             # JSON format (default)
+#   file-extension: .txt              # Text format
+#   file-extension: .data             # Custom extension
+file-extension: .json
+
+# Backup Enabled
+# Create backup files before saving (planned feature)
+# Values: true, false, yes, no, 1, 0, on, off
+backup-enabled: false
+
+# Max Backup Files
+# Maximum number of backup files to keep (planned feature)
+# Range: 1-100
+max-backup-files: 5
+
+#==============================================================================
+# DISPLAY SETTINGS
+#==============================================================================
+
+# Table Width
+# How to size the task table
+# Values: full (use full terminal width), auto (size to content)
+table-width: full
+
+# Status Messages
+# Show status and confirmation messages
+# Values: true, false, yes, no, 1, 0, on, off
+status-messages: true
+
+#==============================================================================
+# EXAMPLE CONFIGURATIONS
+#==============================================================================
+
+# Example 1: Home Office Setup
+# data-dir: ~/work-tasks
+# default-day-length: 8.0
+# default-start-time: 08:00
+# auto-save: true
+
+# Example 2: Shared Team Directory
+# data-dir: /shared/team-tasks
+# default-day-length: 7.5
+# default-start-time: 09:30
+# status-messages: false
+
+# Example 3: Part-time Schedule
+# data-dir: ~/part-time-work
+# default-day-length: 4.0
+# default-start-time: 13:00
+# auto-save: true
+
+# Example 4: Consultant Setup
+# data-dir: ~/client-projects
+# default-day-length: 6.5
+# default-start-time: 10:00
+# backup-enabled: true
+# max-backup-files: 10
