@@ -10,7 +10,6 @@
 #include <sstream>
 #include <ctime>
 #include <iomanip>
-#include <algorithm>
 #include <filesystem>
 #include <cstdlib>
 #include <cstring>
@@ -85,6 +84,39 @@ int getCurrentTimeInMinutes() {
   return tm.tm_hour * 60 + tm.tm_min;
 }
 
+// Helper function to check if a string is a valid date format (YYYY-MM-DD)
+bool isValidDateFormat(const std::string& str) {
+  if (str.length() != 10) return false;
+  if (str[4] != '-' || str[7] != '-') return false;
+
+  // Check if all other characters are digits
+  for (int i = 0; i < 10; ++i) {
+    if (i == 4 || i == 7) continue; // Skip the dashes
+    if (!std::isdigit(str[i])) return false;
+  }
+
+  return true;
+}
+
+// Helper function to resolve custom filename to full path
+std::string resolveCustomFilename(const std::string& input, const Config& config) {
+  std::string dataDir = config.getString("data-dir", "data");
+  std::string extension = config.getString("file-extension", ".json");
+
+  // If input already has an extension, use as-is
+  if (input.find('.') != std::string::npos) {
+    // Check if it's an absolute path
+    if (input[0] == '/' || input.find(dataDir) == 0) {
+      return input;
+    }
+    // Relative path - prepend data directory
+    return dataDir + "/" + input;
+  }
+
+  // No extension - add the configured extension and data directory
+  return dataDir + "/" + input + extension;
+}
+
 // Helper function to convert minutes to HH:MM format
 std::string minutesToTimeString(int minutes) {
   int hours = minutes / 60;
@@ -135,8 +167,8 @@ std::string getNextTask(TaskManager& manager) {
 
 // Helper function to print usage information
 void printUsage(const char* programName) {
-  std::cout << "Usage: " << programName << " [command] [date]\n";
-  std::cout << "       " << programName << " [date]           - Interactive mode for specific date\n";
+  std::cout << "Usage: " << programName << " [command] [date|filename]\n";
+  std::cout << "       " << programName << " [date|filename] - Interactive mode for specific date or file\n";
   std::cout << "\nCommands:\n";
   std::cout << "  now    - Show current active task\n";
   std::cout << "  next   - Show next upcoming task\n";
@@ -146,6 +178,11 @@ void printUsage(const char* programName) {
   std::cout << "  " << programName << " 2024-01-15         - Interactive mode for specific date\n";
   std::cout << "  " << programName << " now 2024-01-15     - Show current task for specific date\n";
   std::cout << "  " << programName << " list 2024-01-15    - List tasks for specific date\n";
+  std::cout << "\nCustom filename parameter:\n";
+  std::cout << "  " << programName << " today.json         - Interactive mode with custom file\n";
+  std::cout << "  " << programName << " project-alpha      - Interactive mode (auto-adds .json extension)\n";
+  std::cout << "  " << programName << " list today.json    - List tasks from custom file\n";
+  std::cout << "  " << programName << " now project-beta   - Show current task from custom file\n";
   std::cout << "\nSession Management:\n";
   std::cout << "  Interactive mode remembers the last opened file\n";
   std::cout << "  Use date parameter to override and work on specific dates\n";
@@ -161,7 +198,10 @@ void printUsage(const char* programName) {
   std::cout << "  PLAN_CONFIG_FILE=/path/to/config.conf  - Use specific config file\n";
   std::cout << "  PLAN_CONFIG_HOME=/path/to/config/dir   - Use custom config directory\n";
   std::cout << "  XDG_CONFIG_HOME=/path/to/configs       - Use XDG config directory\n";
-  std::cout << "\nData files format: tasks_YYYY-MM-DD.json\n";
+  std::cout << "\nData files format: Any .json filename (not limited to date-based naming)\n";
+  std::cout << "\nFile Browser:\n";
+  std::cout << "  Press 'f' in interactive mode to browse and select any JSON task file\n";
+  std::cout << "  Auto-detects available tools: fzf (best) > fd > find > simple selection\n";
 }
 
 // Helper function to list all tasks
@@ -381,30 +421,41 @@ int main(int argc, char* argv[]) {
   bool useLastOpened = false;
   bool isInteractiveWithDate = false;
 
-  // Check for date parameter in different positions
+  // Additional variables for custom filename support
+  std::string customFilename = "";
+  bool isInteractiveWithCustomFile = false;
+
+  // Check for date/filename parameter in different positions
   if (argc == 2) {
-    // Could be: ./proj 2024-01-15 (interactive with date) or ./proj command
+    // Could be: ./proj 2024-01-15 (interactive with date), ./proj filename (interactive with custom file), or ./proj command
     std::string arg = argv[1];
-    if (arg.length() == 10 && arg[4] == '-' && arg[7] == '-') {
+    if (isValidDateFormat(arg)) {
       // It's a date for interactive mode
       targetDate = arg;
       dataFilename = manager.getConfiguredFilename(targetDate);
       isInteractiveWithDate = true;
+    } else if (arg != "now" && arg != "next" && arg != "list" && arg != "help" && arg != "--help" && arg != "-h") {
+      // It's a custom filename for interactive mode
+      customFilename = arg;
+      dataFilename = resolveCustomFilename(customFilename, config);
+      isInteractiveWithCustomFile = true;
     }
-    // If not a date, it will be handled as a command below
+    // If it's a command, it will be handled below
   } else if (argc > 2) {
-    // Could be: ./proj command 2024-01-15
-    targetDate = argv[argc - 1];
-    // Simple date validation (YYYY-MM-DD format)
-    if (targetDate.length() == 10 && targetDate[4] == '-' && targetDate[7] == '-') {
+    // Could be: ./proj command 2024-01-15 or ./proj command filename
+    std::string lastArg = argv[argc - 1];
+    if (isValidDateFormat(lastArg)) {
+      targetDate = lastArg;
       dataFilename = manager.getConfiguredFilename(targetDate);
     } else {
-      targetDate = "";
+      // Treat as custom filename
+      customFilename = lastArg;
+      dataFilename = resolveCustomFilename(customFilename, config);
     }
   }
 
-  // If no command line date and this is interactive mode (no args), try last opened file
-  if (targetDate.empty() && argc == 1) {
+  // If no command line date/filename and this is interactive mode (no args), try last opened file
+  if (targetDate.empty() && customFilename.empty() && argc == 1) {
     std::string lastFile = config.getLastOpenedFile();
     if (!lastFile.empty() && std::filesystem::exists(lastFile)) {
       dataFilename = lastFile;
@@ -412,8 +463,8 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // If no valid date or last file, use today's date
-  if (targetDate.empty() && !useLastOpened) {
+  // If no valid date, custom filename, or last file, use today's date
+  if (targetDate.empty() && customFilename.empty() && !useLastOpened) {
     dataFilename = manager.getConfiguredFilename();
   }
 
@@ -430,6 +481,12 @@ int main(int argc, char* argv[]) {
           std::cout << "Interactive mode for " << targetDate << ": " << dataFilename << std::endl;
         } else {
           std::cout << "Loaded data for " << targetDate << ": " << dataFilename << std::endl;
+        }
+      } else if (!customFilename.empty()) {
+        if (isInteractiveWithCustomFile) {
+          std::cout << "Interactive mode with " << customFilename << ": " << dataFilename << std::endl;
+        } else {
+          std::cout << "Loaded data from " << customFilename << ": " << dataFilename << std::endl;
         }
       }
     }
@@ -448,7 +505,7 @@ int main(int argc, char* argv[]) {
   manager.calcStartTimes();
 
   // Handle command-line arguments
-  if (argc > 1 && !isInteractiveWithDate) {
+  if (argc > 1 && !isInteractiveWithDate && !isInteractiveWithCustomFile) {
     std::string command = argv[1];
 
     if (command == "now") {
@@ -485,6 +542,11 @@ int main(int argc, char* argv[]) {
   // Visual mode state
   bool visual_mode = false;
   int visual_selected_task = -1;
+
+  // File browser state
+  bool file_browser_mode = false;
+  std::vector<std::string> available_files;
+  int selected_file_index = 0;
 
   // Deletion state for 'dd' command
   bool first_d_pressed = false;
@@ -605,12 +667,58 @@ int main(int argc, char* argv[]) {
     return table.Render();
   });
 
+  // Create file browser renderer
+  auto file_browser_renderer = Renderer([&] {
+    if (available_files.empty()) {
+      return vbox({
+        text("File Browser") | bold | hcenter,
+        separator(),
+        text("No JSON files found in data directory") | hcenter,
+        separator(),
+        text("Press Esc to return") | dim | hcenter,
+      }) | border;
+    }
+
+    std::vector<Element> file_elements;
+    for (size_t i = 0; i < available_files.size(); ++i) {
+      std::string filename = available_files[i];
+      // Show relative path for display
+      std::string dataDir = manager.getConfiguredDataDir();
+      std::string displayPath = filename;
+      if (filename.find(dataDir) == 0) {
+        displayPath = filename.substr(dataDir.length());
+        if (!displayPath.empty() && displayPath.front() == '/') {
+          displayPath = displayPath.substr(1);
+        }
+      }
+
+      Element file_element = text(displayPath);
+      if (i == selected_file_index) {
+        file_element = file_element | bgcolor(Color::Cyan) | color(Color::Black) | bold;
+      }
+      file_elements.push_back(file_element);
+    }
+
+    return vbox({
+      text("File Browser - Select a task file") | bold | hcenter,
+      separator(),
+      vbox(file_elements) | flex,
+      separator(),
+      text("j/k: Navigate | Enter: Select | Esc: Cancel") | dim | hcenter,
+    }) | border;
+  });
+
   // Create combined renderer
   auto table_renderer = Renderer([&] {
+    // If in file browser mode, show file browser instead
+    if (file_browser_mode) {
+      return file_browser_renderer->Render();
+    }
+
     auto tasks = manager.getTasks();
 
     // Create status line
-    std::string mode_indicator = edit_mode ? "[EDIT]" : (visual_mode ? "[VISUAL]" : "[NAV]");
+    std::string mode_indicator = edit_mode ? "[EDIT]" : (visual_mode ? "[VISUAL]" : (file_browser_mode ? "[FILE]" : "[NAV]"));
     std::string current_cell = "";
     if (selected_task == -1) {
       // DayLength table
@@ -647,7 +755,7 @@ int main(int argc, char* argv[]) {
         text(current_cell) | dim,
         text(undo_info) | color(Color::Yellow) | dim,
       }),
-      text("hjkl: Navigate | Enter: Edit/Toggle | Tab: Next field | v: Visual | Esc: Exit | i/o: Insert | dd/D: Delete | u: Undo | r/Ctrl+R: Redo | Alt+B: Start Timer | q: Quit") | dim | hcenter,
+      text("hjkl: Navigate | Enter: Edit/Toggle | Tab: Next field | v: Visual | f: File Browser | Esc: Exit | i/o: Insert | dd/D: Delete | u: Undo | r/Ctrl+R: Redo | Alt+B: Start Timer | q: Quit") | dim | hcenter,
     }) | border;
   });
 
@@ -673,7 +781,7 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    // Handle escape - exit edit mode or visual mode
+    // Handle escape - exit edit mode, visual mode, or file browser mode
     if (event == Event::Escape) {
       if (edit_mode) {
         edit_mode = false;
@@ -687,12 +795,19 @@ int main(int argc, char* argv[]) {
         status_message = "";
         show_success = false;
         return true;
+      } else if (file_browser_mode) {
+        file_browser_mode = false;
+        available_files.clear();
+        selected_file_index = 0;
+        status_message = "File browser cancelled";
+        show_success = false;
+        return true;
       }
       return false;
     }
 
-    // Handle undo (u key) - not in edit mode
-    if (event == Event::Character('u') && !edit_mode) {
+    // Handle undo (u key) - not in edit mode or file browser mode
+    if (event == Event::Character('u') && !edit_mode && !file_browser_mode) {
       if (manager.canUndo()) {
         std::string undoDesc = manager.getLastUndoDescription();
         manager.undo();
@@ -705,8 +820,8 @@ int main(int argc, char* argv[]) {
       return true;
     }
 
-    // Handle redo (Ctrl+R or 'r' key) - not in edit mode
-    if ((event == Event::CtrlR || event == Event::Character('r')) && !edit_mode) {
+    // Handle redo (Ctrl+R or 'r' key) - not in edit mode or file browser mode
+    if ((event == Event::CtrlR || event == Event::Character('r')) && !edit_mode && !file_browser_mode) {
       if (manager.canRedo()) {
         std::string redoDesc = manager.getLastRedoDescription();
         manager.redo();
@@ -719,8 +834,8 @@ int main(int argc, char* argv[]) {
       return true;
     }
 
-    // Handle start task timer (Alt+B) - not in edit mode
-    if (event == Event::AltB && !edit_mode) {
+    // Handle start task timer (Alt+B) - not in edit mode or file browser mode
+    if (event == Event::AltB && !edit_mode && !file_browser_mode) {
       if (selected_task >= 0 && selected_task < manager.taskSize()) {
         // Create and execute the start timer command
         auto command = std::make_unique<StartTaskTimerCommand>(&manager, selected_task);
@@ -884,6 +999,61 @@ int main(int argc, char* argv[]) {
           show_success = true;
           return true;
         }
+      } else if (file_browser_mode) {
+        // File browser mode navigation
+        if (event == Event::Character('j') || event == Event::ArrowDown) {
+          if (selected_file_index < available_files.size() - 1) {
+            selected_file_index++;
+          }
+          return true;
+        }
+
+        if (event == Event::Character('k') || event == Event::ArrowUp) {
+          if (selected_file_index > 0) {
+            selected_file_index--;
+          }
+          return true;
+        }
+
+        // Handle Enter in file browser mode - select file
+        if (event == Event::Return) {
+          if (selected_file_index < available_files.size()) {
+            std::string selectedFile = available_files[selected_file_index];
+
+            // Save current data if auto-save is enabled
+            if (config.getBool("auto-save", true)) {
+              manager.saveToFile(dataFilename);
+            }
+
+            // Load the selected file
+            if (manager.loadFromFile(selectedFile)) {
+              dataFilename = selectedFile;
+              // Update session state
+              config.setLastOpenedFile(dataFilename);
+              config.saveSessionState();
+
+              status_message = "Loaded file: " + selectedFile;
+              show_success = true;
+
+              // Reset navigation state
+              selected_task = -1;
+              selected_column = 0;
+              edit_mode = false;
+              visual_mode = false;
+              visual_selected_task = -1;
+              edit_buffer = "";
+
+              // Exit file browser mode
+              file_browser_mode = false;
+              available_files.clear();
+              selected_file_index = 0;
+            } else {
+              status_message = "Failed to load file: " + selectedFile;
+              show_success = false;
+            }
+          }
+          return true;
+        }
       } else {
         // Normal navigation mode
         if (event == Event::Character('j') || event == Event::ArrowDown) {
@@ -909,14 +1079,14 @@ int main(int argc, char* argv[]) {
         }
       }
 
-      if (event == Event::Character('h') || event == Event::ArrowLeft) {
+      if (event == Event::Character('h') || event == Event::ArrowLeft || event == Event::Character('b')) {
         if (selected_column > 0) {
           selected_column--;
         }
         return true;
       }
 
-      if (event == Event::Character('l') || event == Event::ArrowRight) {
+      if (event == Event::Character('l') || event == Event::ArrowRight || event == Event::Character("w") || event == Event::Character('e')) {
         if (selected_column < NUM_COLUMNS - 1) {
           selected_column++;
         }
@@ -963,7 +1133,7 @@ int main(int argc, char* argv[]) {
       }
 
       // Handle vim-like insertion commands - inline insertion (not in visual mode)
-      if (event == Event::Character('i') && !visual_mode) {
+      if (event == Event::Character('i') || event == Event::Character('O') && !visual_mode) {
         // Insert before current task
         int insert_position = selected_task;
         manager.insertTask(insert_position, "", 0, false); // Empty task with default values
@@ -1017,8 +1187,8 @@ int main(int argc, char* argv[]) {
         return true;
       }
 
-      // Handle visual mode entry
-      if (event == Event::Character('v')) {
+      // Handle visual mode entry (not in file browser mode)
+      if (event == Event::Character('v') && !file_browser_mode) {
         if (!visual_mode) {
           // Only enter visual mode if we're on an actual task, not on day length row
           if (selected_task >= 0 && selected_task < manager.taskSize()) {
@@ -1028,6 +1198,24 @@ int main(int argc, char* argv[]) {
             show_success = false;
           } else {
             status_message = "Cannot enter visual mode on day length row";
+            show_success = false;
+          }
+        }
+        return true;
+      }
+
+      // Handle file browser (f key) - not in edit or visual mode
+      if (event == Event::Character('f') && !edit_mode && !visual_mode) {
+        if (!file_browser_mode) {
+          // Enter file browser mode
+          available_files = manager.findJsonFiles();
+          if (available_files.empty()) {
+            status_message = "No JSON files found in data directory";
+            show_success = false;
+          } else {
+            file_browser_mode = true;
+            selected_file_index = 0;
+            status_message = "File browser - Use j/k to navigate, Enter to select";
             show_success = false;
           }
         }

@@ -56,6 +56,18 @@ class TaskManager {
   std::string getConfiguredFilename() const;
   std::string getConfiguredFilename(const std::string& date) const;
 
+  // File discovery and selection methods
+  std::vector<std::string> findJsonFiles() const;
+  std::string selectFileWithFzf() const;
+  bool isValidTaskFile(const std::string& filename) const;
+
+  // Helper methods for different file selection tools
+  bool isCommandAvailable(const std::string& command) const;
+  std::string selectFileSimple() const;
+  std::string selectFileWithFzfTool() const;
+  std::string selectFileWithFdTool() const;
+  std::string selectFileWithFindTool() const;
+
   // Undo/Redo functionality
   void executeCommand(std::unique_ptr<UndoableCommand> command);
   bool canUndo() const;

@@ -9,6 +9,9 @@
 #include <iomanip>
 #include <sstream>
 #include <cmath>
+#include <algorithm>
+#include <unistd.h>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -404,6 +407,413 @@ std::string TaskManager::getConfiguredFilename(const std::string& date) const {
   std::string extension = config ? config->getString("file-extension", ".json") : ".json";
 
   return dataDir + "/tasks_" + date + extension;
+}
+
+// File discovery and selection methods
+std::vector<std::string> TaskManager::findJsonFiles() const {
+  std::vector<std::string> jsonFiles;
+  std::string dataDir = getConfiguredDataDir();
+  std::string extension = config ? config->getString("file-extension", ".json") : ".json";
+
+  try {
+    if (!std::filesystem::exists(dataDir)) {
+      return jsonFiles; // Return empty vector if directory doesn't exist
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(dataDir)) {
+      if (entry.is_regular_file()) {
+        std::string filename = entry.path().filename().string();
+        std::string filepath = entry.path().string();
+
+        // Check if file has the correct extension
+        if (filename.size() >= extension.size() &&
+            filename.substr(filename.size() - extension.size()) == extension) {
+
+          // Validate that it's a proper task file
+          if (isValidTaskFile(filepath)) {
+            jsonFiles.push_back(filepath);
+          }
+        }
+      }
+    }
+
+    // Sort files by modification time (newest first)
+    std::sort(jsonFiles.begin(), jsonFiles.end(), [](const std::string& a, const std::string& b) {
+      try {
+        auto timeA = std::filesystem::last_write_time(a);
+        auto timeB = std::filesystem::last_write_time(b);
+        return timeA > timeB;
+      } catch (const std::exception&) {
+        return false;
+      }
+    });
+
+  } catch (const std::exception& e) {
+    std::cerr << "Error scanning directory " << dataDir << ": " << e.what() << std::endl;
+  }
+
+  return jsonFiles;
+}
+
+// Helper function to check if a command is available
+bool TaskManager::isCommandAvailable(const std::string& command) const {
+  std::string checkCmd = "command -v " + command + " >/dev/null 2>&1";
+  return system(checkCmd.c_str()) == 0;
+}
+
+// Helper function for simple numbered file selection
+std::string TaskManager::selectFileSimple() const {
+  std::vector<std::string> jsonFiles = findJsonFiles();
+
+  if (jsonFiles.empty()) {
+    std::cout << "No JSON files found in data directory." << std::endl;
+    return "";
+  }
+
+  std::string dataDir = getConfiguredDataDir();
+
+  // Display files with numbers
+  std::cout << "\nAvailable task files:" << std::endl;
+  std::cout << "=====================" << std::endl;
+  for (size_t i = 0; i < jsonFiles.size(); ++i) {
+    std::string displayPath = jsonFiles[i];
+    // Show relative path if file is in data directory
+    if (displayPath.find(dataDir) == 0) {
+      displayPath = displayPath.substr(dataDir.length());
+      if (!displayPath.empty() && displayPath.front() == '/') {
+        displayPath = displayPath.substr(1);
+      }
+    }
+
+    // Show file modification time
+    try {
+      auto ftime = std::filesystem::last_write_time(jsonFiles[i]);
+      auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        ftime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+      auto cftime = std::chrono::system_clock::to_time_t(sctp);
+      auto tm = *std::localtime(&cftime);
+
+      std::cout << std::setw(2) << (i + 1) << ". " << displayPath
+                << " (modified: " << std::put_time(&tm, "%Y-%m-%d %H:%M") << ")" << std::endl;
+    } catch (const std::exception&) {
+      std::cout << std::setw(2) << (i + 1) << ". " << displayPath << std::endl;
+    }
+  }
+
+  std::cout << " 0. Cancel" << std::endl;
+  std::cout << "\nEnter your choice (0-" << jsonFiles.size() << "): ";
+
+  std::string input;
+  std::getline(std::cin, input);
+
+  try {
+    int choice = std::stoi(input);
+    if (choice == 0) {
+      return ""; // User cancelled
+    }
+    if (choice >= 1 && choice <= static_cast<int>(jsonFiles.size())) {
+      return jsonFiles[choice - 1];
+    }
+  } catch (const std::exception&) {
+    // Invalid input
+  }
+
+  std::cout << "Invalid selection." << std::endl;
+  return "";
+}
+
+std::string TaskManager::selectFileWithFzf() const {
+  std::vector<std::string> jsonFiles = findJsonFiles();
+
+  if (jsonFiles.empty()) {
+    return ""; // No files found
+  }
+
+  // Check for available file selection tools in order of preference
+  if (isCommandAvailable("fzf")) {
+    return selectFileWithFzfTool();
+  } else if (isCommandAvailable("fd")) {
+    return selectFileWithFdTool();
+  } else if (isCommandAvailable("find")) {
+    return selectFileWithFindTool();
+  } else {
+    // Fallback to simple numbered selection
+    std::cerr << "Note: fzf, fd, or find not found. Using simple selection interface." << std::endl;
+    return selectFileSimple();
+  }
+}
+
+// Implementation for fzf-based file selection
+std::string TaskManager::selectFileWithFzfTool() const {
+  std::vector<std::string> jsonFiles = findJsonFiles();
+
+  // Create a temporary file with the list of files
+  std::string tempFile = "/tmp/plan_files_" + std::to_string(getpid()) + ".txt";
+  std::ofstream temp(tempFile);
+  if (!temp.is_open()) {
+    std::cerr << "Error: Could not create temporary file for fzf" << std::endl;
+    return "";
+  }
+
+  // Write file paths to temp file, showing relative paths for better display
+  std::string dataDir = getConfiguredDataDir();
+  for (const auto& file : jsonFiles) {
+    std::string displayPath = file;
+    // Show relative path if file is in data directory
+    if (file.find(dataDir) == 0) {
+      displayPath = file.substr(dataDir.length());
+      if (!displayPath.empty() && displayPath.front() == '/') {
+        displayPath = displayPath.substr(1);
+      }
+    }
+    temp << displayPath << " (" << file << ")" << std::endl;
+  }
+  temp.close();
+
+  // Run fzf to select a file
+  std::string fzfCommand = "fzf --height=40% --reverse --prompt='Select task file: ' --preview='head -20 {}' < " + tempFile;
+
+  FILE* pipe = popen(fzfCommand.c_str(), "r");
+  if (!pipe) {
+    std::cerr << "Error: Could not run fzf." << std::endl;
+    std::filesystem::remove(tempFile);
+    return "";
+  }
+
+  char buffer[1024];
+  std::string result = "";
+  if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+    result = buffer;
+    // Remove trailing newline
+    if (!result.empty() && result.back() == '\n') {
+      result.pop_back();
+    }
+  }
+
+  int exitCode = pclose(pipe);
+  std::filesystem::remove(tempFile);
+
+  if (exitCode != 0 || result.empty()) {
+    return ""; // User cancelled or fzf failed
+  }
+
+  // Extract the actual file path from the result (it's in parentheses)
+  size_t start = result.find('(');
+  size_t end = result.find(')', start);
+  if (start != std::string::npos && end != std::string::npos) {
+    return result.substr(start + 1, end - start - 1);
+  }
+
+  return "";
+}
+
+// Implementation for fd-based file selection
+std::string TaskManager::selectFileWithFdTool() const {
+  std::string dataDir = getConfiguredDataDir();
+  std::string extension = config ? config->getString("file-extension", ".json") : ".json";
+
+  // Use fd to find JSON files and pipe to fzf if available, otherwise use simple selection
+  std::string fdCommand = "fd -e json . " + dataDir;
+
+  if (isCommandAvailable("fzf")) {
+    fdCommand += " | fzf --height=40% --reverse --prompt='Select task file: ' --preview='head -20 {}'";
+  } else {
+    // Use fd with simple numbered selection
+    FILE* pipe = popen(fdCommand.c_str(), "r");
+    if (!pipe) {
+      std::cerr << "Error: Could not run fd command." << std::endl;
+      return "";
+    }
+
+    std::vector<std::string> files;
+    char buffer[1024];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+      std::string file = buffer;
+      if (!file.empty() && file.back() == '\n') {
+        file.pop_back();
+      }
+      if (isValidTaskFile(file)) {
+        files.push_back(file);
+      }
+    }
+    pclose(pipe);
+
+    if (files.empty()) {
+      std::cout << "No valid JSON task files found." << std::endl;
+      return "";
+    }
+
+    // Display files with numbers
+    std::cout << "\nAvailable task files (found with fd):" << std::endl;
+    std::cout << "=====================================" << std::endl;
+    for (size_t i = 0; i < files.size(); ++i) {
+      std::string displayPath = files[i];
+      if (displayPath.find(dataDir) == 0) {
+        displayPath = displayPath.substr(dataDir.length());
+        if (!displayPath.empty() && displayPath.front() == '/') {
+          displayPath = displayPath.substr(1);
+        }
+      }
+      std::cout << std::setw(2) << (i + 1) << ". " << displayPath << std::endl;
+    }
+    std::cout << " 0. Cancel" << std::endl;
+    std::cout << "\nEnter your choice (0-" << files.size() << "): ";
+
+    std::string input;
+    std::getline(std::cin, input);
+
+    try {
+      int choice = std::stoi(input);
+      if (choice == 0) {
+        return "";
+      }
+      if (choice >= 1 && choice <= static_cast<int>(files.size())) {
+        return files[choice - 1];
+      }
+    } catch (const std::exception&) {
+      // Invalid input
+    }
+
+    std::cout << "Invalid selection." << std::endl;
+    return "";
+  }
+
+  // If fzf is available, run the combined command
+  FILE* pipe = popen(fdCommand.c_str(), "r");
+  if (!pipe) {
+    std::cerr << "Error: Could not run fd + fzf command." << std::endl;
+    return "";
+  }
+
+  char buffer[1024];
+  std::string result = "";
+  if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+    result = buffer;
+    if (!result.empty() && result.back() == '\n') {
+      result.pop_back();
+    }
+  }
+
+  int exitCode = pclose(pipe);
+  if (exitCode != 0 || result.empty()) {
+    return "";
+  }
+
+  return result;
+}
+
+// Implementation for find-based file selection
+std::string TaskManager::selectFileWithFindTool() const {
+  std::string dataDir = getConfiguredDataDir();
+  std::string extension = config ? config->getString("file-extension", ".json") : ".json";
+
+  // Use find to locate JSON files
+  std::string findCommand = "find " + dataDir + " -name '*" + extension + "' -type f";
+
+  FILE* pipe = popen(findCommand.c_str(), "r");
+  if (!pipe) {
+    std::cerr << "Error: Could not run find command." << std::endl;
+    return "";
+  }
+
+  std::vector<std::string> files;
+  char buffer[1024];
+  while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+    std::string file = buffer;
+    if (!file.empty() && file.back() == '\n') {
+      file.pop_back();
+    }
+    if (isValidTaskFile(file)) {
+      files.push_back(file);
+    }
+  }
+  pclose(pipe);
+
+  if (files.empty()) {
+    std::cout << "No valid JSON task files found." << std::endl;
+    return "";
+  }
+
+  // Sort files by modification time (newest first)
+  std::sort(files.begin(), files.end(), [](const std::string& a, const std::string& b) {
+    try {
+      auto timeA = std::filesystem::last_write_time(a);
+      auto timeB = std::filesystem::last_write_time(b);
+      return timeA > timeB;
+    } catch (const std::exception&) {
+      return false;
+    }
+  });
+
+  // Display files with numbers
+  std::cout << "\nAvailable task files (found with find):" << std::endl;
+  std::cout << "=======================================" << std::endl;
+  for (size_t i = 0; i < files.size(); ++i) {
+    std::string displayPath = files[i];
+    if (displayPath.find(dataDir) == 0) {
+      displayPath = displayPath.substr(dataDir.length());
+      if (!displayPath.empty() && displayPath.front() == '/') {
+        displayPath = displayPath.substr(1);
+      }
+    }
+
+    // Show file modification time
+    try {
+      auto ftime = std::filesystem::last_write_time(files[i]);
+      auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        ftime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+      auto cftime = std::chrono::system_clock::to_time_t(sctp);
+      auto tm = *std::localtime(&cftime);
+
+      std::cout << std::setw(2) << (i + 1) << ". " << displayPath
+                << " (modified: " << std::put_time(&tm, "%Y-%m-%d %H:%M") << ")" << std::endl;
+    } catch (const std::exception&) {
+      std::cout << std::setw(2) << (i + 1) << ". " << displayPath << std::endl;
+    }
+  }
+  std::cout << " 0. Cancel" << std::endl;
+  std::cout << "\nEnter your choice (0-" << files.size() << "): ";
+
+  std::string input;
+  std::getline(std::cin, input);
+
+  try {
+    int choice = std::stoi(input);
+    if (choice == 0) {
+      return "";
+    }
+    if (choice >= 1 && choice <= static_cast<int>(files.size())) {
+      return files[choice - 1];
+    }
+  } catch (const std::exception&) {
+    // Invalid input
+  }
+
+  std::cout << "Invalid selection." << std::endl;
+  return "";
+}
+
+bool TaskManager::isValidTaskFile(const std::string& filename) const {
+  try {
+    if (!std::filesystem::exists(filename)) {
+      return false;
+    }
+
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+      return false;
+    }
+
+    json j;
+    file >> j;
+    file.close();
+
+    // Check for required fields that make it a valid task file
+    return j.contains("dayLength") && j.contains("tasks") && j["tasks"].is_array();
+
+  } catch (const std::exception&) {
+    return false;
+  }
 }
 
 // Undo/Redo functionality implementation

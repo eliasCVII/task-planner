@@ -12,6 +12,15 @@ A terminal-based interactive task planner with vim-like navigation, data persist
 - **CLI Commands** - Query tasks from command line (`now`, `next`, `list`)
 - **Date Support** - Daily task files with historical data access
 
+## Prerequisites
+
+- C++17 compatible compiler
+- CMake 3.11 or higher
+- Git (for fetching dependencies)
+- `fzf` (recommended for best file browser experience)
+- `fd` or `find` (alternative file discovery tools)
+- If none are available, falls back to simple numbered selection
+
 ## Quick Start
 
 ### 1. Download and Build
@@ -86,6 +95,7 @@ See [CONFIG.md](CONFIG.md) for complete configuration documentation.
 - `Tab` - Move to next field during editing
 - `i/o` - Insert new task before/after current
 - `v` - Visual mode for moving tasks
+- `f` - File browser (select any JSON task file)
 - `dd` or `D` - Delete task
 - `q` - Quit and save
 - `Esc` - Cancel editing/visual mode
@@ -104,8 +114,20 @@ See [CONFIG.md](CONFIG.md) for complete configuration documentation.
 
 Tasks are automatically saved to JSON files:
 - **Location**: Configured via `data-dir` (default: `data/`)
-- **Format**: `tasks_YYYY-MM-DD.json`
+- **Format**: Any `.json` filename (not limited to date-based naming)
 - **Content**: Human-readable JSON that can be edited manually
+
+#### File Browser
+
+The interactive file browser (`f` key) allows you to:
+- Browse all JSON files in your data directory
+- Select files with any naming convention (not just date-based)
+- Automatic tool detection with fallback options:
+  - **Best**: `fzf` with fuzzy search and file preview
+  - **Good**: `fd` for fast file discovery (with or without `fzf`)
+  - **Basic**: `find` for standard file discovery
+  - **Fallback**: Simple numbered selection if no tools available
+- Switch between different task files seamlessly
 
 Example data file:
 ```json
