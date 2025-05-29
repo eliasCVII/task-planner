@@ -3,16 +3,20 @@
 
 #include <vector>
 #include <string>
+#include <memory>
 #include "Act.h"
 
-// Forward declaration
+// Forward declarations
 class Config;
+class UndoManager;
+class UndoableCommand;
 
 class TaskManager {
  private:
   std::vector<Act> tasks;
   int dayLength;
   Config* config;  // Pointer to configuration
+  std::unique_ptr<UndoManager> undoManager;  // Undo/redo functionality
 
  public:
   TaskManager(int dl);
@@ -34,6 +38,8 @@ class TaskManager {
   Act& getTaskRef(int index);
   bool deleteTask(int index); // Returns true if deletion was successful
   bool moveTask(int fromIndex, int toIndex); // Move task from one position to another
+  bool moveTaskUp(int index); // Move task up by one position (to earlier time)
+  bool moveTaskDown(int index); // Move task down by one position (to later time)
   int getDayLength() const; // Get current day length in minutes
   void setDayLength(int minutes); // Set day length in minutes
   double getDayLengthHours() const; // Get day length in hours (for display)
@@ -49,6 +55,17 @@ class TaskManager {
   std::string getConfiguredDataDir() const;
   std::string getConfiguredFilename() const;
   std::string getConfiguredFilename(const std::string& date) const;
+
+  // Undo/Redo functionality
+  void executeCommand(std::unique_ptr<UndoableCommand> command);
+  bool canUndo() const;
+  bool canRedo() const;
+  void undo();
+  void redo();
+  std::string getLastUndoDescription() const;
+  std::string getLastRedoDescription() const;
+  size_t getUndoStackSize() const;
+  size_t getRedoStackSize() const;
 };
 
 #endif  // TASKMANAGER_H

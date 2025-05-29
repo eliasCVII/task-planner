@@ -12,11 +12,71 @@
 #include <iomanip>
 #include <algorithm>
 #include <filesystem>
+#include <cstdlib>
+#include <cstring>
 
 #include "TaskManager.h"
 #include "Config.h"
+#include "UndoManager.h"
 
 using namespace ftxui;
+
+// Helper function to expand home directory path
+std::string expandHomePath(const std::string& path) {
+  if (path.empty() || path[0] != '~') {
+    return path;
+  }
+
+  const char* home = std::getenv("HOME");
+  if (!home) {
+    // Fallback for systems where HOME is not set
+    home = std::getenv("USERPROFILE"); // Windows
+    if (!home) {
+      return path; // Return original path if no home directory found
+    }
+  }
+
+  return std::string(home) + path.substr(1);
+}
+
+// Helper function to get config file path with environment variable support
+std::string getConfigFilePath() {
+  std::string configPath;
+
+  // Priority 1: PLAN_CONFIG_FILE (full path to config file)
+  const char* configFile = std::getenv("PLAN_CONFIG_FILE");
+  if (configFile && strlen(configFile) > 0) {
+    configPath = expandHomePath(configFile);
+  }
+  // Priority 2: PLAN_CONFIG_HOME (directory containing plan.conf)
+  else {
+    const char* configHome = std::getenv("PLAN_CONFIG_HOME");
+    if (configHome && strlen(configHome) > 0) {
+      configPath = expandHomePath(std::string(configHome) + "/plan.conf");
+    }
+    // Priority 3: XDG_CONFIG_HOME (XDG Base Directory Specification)
+    else {
+      const char* xdgConfigHome = std::getenv("XDG_CONFIG_HOME");
+      if (xdgConfigHome && strlen(xdgConfigHome) > 0) {
+        configPath = expandHomePath(std::string(xdgConfigHome) + "/plan/plan.conf");
+      }
+      // Priority 4: Default location (~/.config/plan/plan.conf)
+      else {
+        configPath = expandHomePath("~/.config/plan/plan.conf");
+      }
+    }
+  }
+
+  // Ensure the config directory exists
+  std::filesystem::path configDir = std::filesystem::path(configPath).parent_path();
+  try {
+    std::filesystem::create_directories(configDir);
+  } catch (const std::exception& e) {
+    std::cerr << "Warning: Could not create config directory " << configDir << ": " << e.what() << std::endl;
+  }
+
+  return configPath;
+}
 
 // Helper function to get current time in minutes since midnight
 int getCurrentTimeInMinutes() {
@@ -90,9 +150,17 @@ void printUsage(const char* programName) {
   std::cout << "  Interactive mode remembers the last opened file\n";
   std::cout << "  Use date parameter to override and work on specific dates\n";
   std::cout << "\nConfiguration:\n";
-  std::cout << "  Settings are loaded from plan.conf (see CONFIG.md for details)\n";
+  std::cout << "  Config file location (in priority order):\n";
+  std::cout << "    1. $PLAN_CONFIG_FILE (full path to config file)\n";
+  std::cout << "    2. $PLAN_CONFIG_HOME/plan.conf (custom config directory)\n";
+  std::cout << "    3. $XDG_CONFIG_HOME/plan/plan.conf (XDG Base Directory)\n";
+  std::cout << "    4. ~/.config/plan/plan.conf (default)\n";
   std::cout << "  Default data directory: data/ (configurable via data-dir setting)\n";
   std::cout << "  Default day length: 7.0 hours (configurable via default-day-length setting)\n";
+  std::cout << "\nEnvironment Variables:\n";
+  std::cout << "  PLAN_CONFIG_FILE=/path/to/config.conf  - Use specific config file\n";
+  std::cout << "  PLAN_CONFIG_HOME=/path/to/config/dir   - Use custom config directory\n";
+  std::cout << "  XDG_CONFIG_HOME=/path/to/configs       - Use XDG config directory\n";
   std::cout << "\nData files format: tasks_YYYY-MM-DD.json\n";
 }
 
@@ -179,8 +247,8 @@ bool isColumnEditable(int col_idx) {
   return col_idx >= 0 && col_idx <= 4;
 }
 
-// Helper function to apply edit to task
-bool applyEdit(TaskManager& manager, int task_idx, int col_idx, const std::string& value, std::string& error_msg) {
+// Helper function to apply edit to task using undoable commands
+bool applyEditWithUndo(TaskManager& manager, int task_idx, int col_idx, const std::string& value, std::string& error_msg) {
   if (task_idx < 0 || task_idx >= manager.taskSize()) {
     error_msg = "Invalid task index";
     return false;
@@ -192,80 +260,100 @@ bool applyEdit(TaskManager& manager, int task_idx, int col_idx, const std::strin
   try {
     switch (col_idx) {
       case 0: // Fixed (fixed-time)
-        if (trimmed_value == "Yes" || trimmed_value == "yes" || trimmed_value == "Y" || trimmed_value == "y" || trimmed_value == "1" || trimmed_value == "true") {
-          if (!task.isFixed()) {
-            task.setFixed(); // Toggle to make it fixed
+        {
+          bool oldFixed = task.isFixed();
+          bool newFixed = oldFixed;
+
+          if (trimmed_value == "Yes" || trimmed_value == "yes" || trimmed_value == "Y" || trimmed_value == "y" || trimmed_value == "1" || trimmed_value == "true") {
+            newFixed = true;
+          } else if (trimmed_value == "No" || trimmed_value == "no" || trimmed_value == "N" || trimmed_value == "n" || trimmed_value == "0" || trimmed_value == "false") {
+            newFixed = false;
+          } else {
+            error_msg = "Invalid fixed value. Use Yes/No, Y/N, 1/0, or true/false";
+            return false;
           }
-        } else if (trimmed_value == "No" || trimmed_value == "no" || trimmed_value == "N" || trimmed_value == "n" || trimmed_value == "0" || trimmed_value == "false") {
-          if (task.isFixed()) {
-            task.setFixed(); // Toggle to make it flexible
+
+          if (oldFixed != newFixed) {
+            auto command = std::make_unique<ToggleTaskFixedCommand>(&manager, task_idx, oldFixed);
+            manager.executeCommand(std::move(command));
           }
-        } else {
-          error_msg = "Invalid fixed value. Use Yes/No, Y/N, 1/0, or true/false";
-          return false;
         }
         break;
 
       case 1: // Rigid
-        if (trimmed_value == "Yes" || trimmed_value == "yes" || trimmed_value == "Y" || trimmed_value == "y" || trimmed_value == "1" || trimmed_value == "true") {
-          task.setRigid(true);
-        } else if (trimmed_value == "No" || trimmed_value == "no" || trimmed_value == "N" || trimmed_value == "n" || trimmed_value == "0" || trimmed_value == "false") {
-          task.setRigid(false);
-        } else {
-          error_msg = "Invalid rigid value. Use Yes/No, Y/N, 1/0, or true/false";
-          return false;
+        {
+          bool oldRigid = task.isRigid();
+          bool newRigid = oldRigid;
+
+          if (trimmed_value == "Yes" || trimmed_value == "yes" || trimmed_value == "Y" || trimmed_value == "y" || trimmed_value == "1" || trimmed_value == "true") {
+            newRigid = true;
+          } else if (trimmed_value == "No" || trimmed_value == "no" || trimmed_value == "N" || trimmed_value == "n" || trimmed_value == "0" || trimmed_value == "false") {
+            newRigid = false;
+          } else {
+            error_msg = "Invalid rigid value. Use Yes/No, Y/N, 1/0, or true/false";
+            return false;
+          }
+
+          if (oldRigid != newRigid) {
+            auto command = std::make_unique<ToggleTaskRigidCommand>(&manager, task_idx, oldRigid);
+            manager.executeCommand(std::move(command));
+          }
         }
         break;
 
       case 2: // Name
-        if (trimmed_value.empty()) {
-          error_msg = "Task name cannot be empty";
-          return false;
+        {
+          if (trimmed_value.empty()) {
+            error_msg = "Task name cannot be empty";
+            return false;
+          }
+
+          std::string oldName = task.getName();
+          if (oldName != trimmed_value) {
+            auto command = std::make_unique<EditTaskNameCommand>(&manager, task_idx, oldName, trimmed_value);
+            manager.executeCommand(std::move(command));
+          }
         }
-        task.setName(trimmed_value);
         break;
 
       case 3: // Start Time
-        if (!trimmed_value.empty() && !isValidTimeFormat(trimmed_value)) {
-          error_msg = "Invalid time format. Use HH:MM";
-          return false;
-        }
-        if (trimmed_value.empty()) {
-          // Make task flexible
-          if (task.isFixed()) {
-            task.setFixed();
+        {
+          if (!trimmed_value.empty() && !isValidTimeFormat(trimmed_value)) {
+            error_msg = "Invalid time format. Use HH:MM";
+            return false;
           }
-        } else {
-          // Set start time and make task fixed
-          task.setStartTime(trimmed_value);
-          if (!task.isFixed()) {
-            task.setFixed();
+
+          std::string oldStartTime = task.getStartStr();
+          bool oldFixed = task.isFixed();
+          bool newFixed = !trimmed_value.empty(); // Fixed if has start time, flexible if empty
+
+          if (oldStartTime != trimmed_value || oldFixed != newFixed) {
+            auto command = std::make_unique<EditTaskStartTimeCommand>(&manager, task_idx, oldStartTime, trimmed_value, oldFixed, newFixed);
+            manager.executeCommand(std::move(command));
           }
         }
         break;
 
       case 4: // Length
-        if (!isValidNumber(trimmed_value) || std::stoi(trimmed_value) <= 0) {
-          error_msg = "Length must be a positive number";
-          return false;
+        {
+          if (!isValidNumber(trimmed_value) || std::stoi(trimmed_value) <= 0) {
+            error_msg = "Length must be a positive number";
+            return false;
+          }
+
+          int oldLength = task.getLength();
+          int newLength = std::stoi(trimmed_value);
+
+          if (oldLength != newLength) {
+            auto command = std::make_unique<EditTaskLengthCommand>(&manager, task_idx, oldLength, newLength);
+            manager.executeCommand(std::move(command));
+          }
         }
-        task.setLength(std::stoi(trimmed_value));
         break;
 
       default:
         error_msg = "Column not editable";
         return false;
-    }
-
-    // Recalculate task properties after any edit
-    bool hasWarnings = false;
-    auto warnings = manager.calcActLen(hasWarnings);
-    manager.calcStartTimes();
-
-    // Display warnings if any
-    if (hasWarnings && !warnings.empty()) {
-      error_msg = warnings[0]; // Show first warning
-      return false;
     }
 
     return true;
@@ -278,7 +366,7 @@ bool applyEdit(TaskManager& manager, int task_idx, int col_idx, const std::strin
 
 int main(int argc, char* argv[]) {
   // Load configuration
-  Config config("plan.conf");
+  Config config(getConfigFilePath());
   config.loadFromFile();
 
   // Initialize TaskManager with config
@@ -539,6 +627,13 @@ int main(int argc, char* argv[]) {
       }
     }
 
+    // Create undo/redo status info
+    std::string undo_info = "";
+    if (manager.canUndo() || manager.canRedo()) {
+      undo_info = " | Undo: " + std::to_string(manager.getUndoStackSize()) +
+                  " | Redo: " + std::to_string(manager.getRedoStackSize());
+    }
+
     return vbox({
       text("Interactive Task Manager") | bold | hcenter,
       separator(),
@@ -550,8 +645,9 @@ int main(int argc, char* argv[]) {
         text(mode_indicator) | (edit_mode ? color(Color::Red) : color(Color::Green)) | bold,
         text(" | "),
         text(current_cell) | dim,
+        text(undo_info) | color(Color::Yellow) | dim,
       }),
-      text("hjkl: Navigate | Enter: Edit/Toggle | Tab: Next field | v: Visual | Esc: Exit | i/o: Insert | dd/D: Delete | q: Quit") | dim | hcenter,
+      text("hjkl: Navigate | Enter: Edit/Toggle | Tab: Next field | v: Visual | Esc: Exit | i/o: Insert | dd/D: Delete | u: Undo | r/Ctrl+R: Redo | Alt+B: Start Timer | q: Quit") | dim | hcenter,
     }) | border;
   });
 
@@ -595,6 +691,51 @@ int main(int argc, char* argv[]) {
       return false;
     }
 
+    // Handle undo (u key) - not in edit mode
+    if (event == Event::Character('u') && !edit_mode) {
+      if (manager.canUndo()) {
+        std::string undoDesc = manager.getLastUndoDescription();
+        manager.undo();
+        status_message = "Undid: " + undoDesc;
+        show_success = true;
+      } else {
+        status_message = "Nothing to undo";
+        show_success = false;
+      }
+      return true;
+    }
+
+    // Handle redo (Ctrl+R or 'r' key) - not in edit mode
+    if ((event == Event::CtrlR || event == Event::Character('r')) && !edit_mode) {
+      if (manager.canRedo()) {
+        std::string redoDesc = manager.getLastRedoDescription();
+        manager.redo();
+        status_message = "Redid: " + redoDesc;
+        show_success = true;
+      } else {
+        status_message = "Nothing to redo";
+        show_success = false;
+      }
+      return true;
+    }
+
+    // Handle start task timer (Alt+B) - not in edit mode
+    if (event == Event::AltB && !edit_mode) {
+      if (selected_task >= 0 && selected_task < manager.taskSize()) {
+        // Create and execute the start timer command
+        auto command = std::make_unique<StartTaskTimerCommand>(&manager, selected_task);
+        std::string timerDesc = command->getDescription();
+        manager.executeCommand(std::move(command));
+
+        status_message = timerDesc + " (undo with 'u')";
+        show_success = true;
+      } else {
+        status_message = "Cannot start timer - no task selected";
+        show_success = false;
+      }
+      return true;
+    }
+
     // Handle edit mode events
     if (edit_mode) {
       if (event == Event::Return) {
@@ -625,7 +766,7 @@ int main(int argc, char* argv[]) {
             edit_success = false;
           }
         } else {
-          edit_success = applyEdit(manager, selected_task, selected_column, edit_buffer, error_msg);
+          edit_success = applyEditWithUndo(manager, selected_task, selected_column, edit_buffer, error_msg);
         }
 
         if (edit_success) {
@@ -657,7 +798,7 @@ int main(int argc, char* argv[]) {
       } else if (event == Event::Tab) {
         // Apply current edit first
         std::string error_msg;
-        if (applyEdit(manager, selected_task, selected_column, edit_buffer, error_msg)) {
+        if (applyEditWithUndo(manager, selected_task, selected_column, edit_buffer, error_msg)) {
           // Tab cycles through editable columns of the current task
           int original_column = selected_column;
           do {
@@ -691,33 +832,23 @@ int main(int argc, char* argv[]) {
       if (visual_mode) {
         if (event == Event::Character('j') || event == Event::ArrowDown) {
           // Move selected task down
-          if (visual_selected_task < manager.taskSize() - 1) {
-            // Check if moving a fixed task up (to earlier position) - make it flexible
+          if (visual_selected_task >= 0 && visual_selected_task < manager.taskSize() - 1) {
+            // Store if task was fixed before movement
             auto& task = manager.getTaskRef(visual_selected_task);
-            if (task.isFixed() && visual_selected_task < selected_task) {
-              task.setFixed(); // Remove fixed status
-              status_message = "Fixed task made flexible for movement";
-              show_success = false;
-            }
+            bool wasFixed = task.isFixed();
 
-            if (manager.moveTask(visual_selected_task, visual_selected_task + 1)) {
-              visual_selected_task++;
-              selected_task = visual_selected_task; // Keep cursor on moved task
+            // Use undoable command for movement
+            auto command = std::make_unique<MoveTaskDownCommand>(&manager, visual_selected_task, wasFixed);
+            manager.executeCommand(std::move(command));
 
-              // Recalculate task properties after movement
-              bool hasWarnings = false;
-              auto warnings = manager.calcActLen(hasWarnings);
-              manager.calcStartTimes();
+            visual_selected_task++;
+            selected_task = visual_selected_task; // Keep cursor on moved task
 
-              // Display warnings if any
-              if (hasWarnings && !warnings.empty()) {
-                status_message = "Warning: " + warnings[0];
-                show_success = false;
-              } else if (status_message.empty()) {
-                status_message = "Task moved down";
-                show_success = true;
-              }
-            }
+            status_message = "Task moved down (undo with 'u')";
+            show_success = true;
+          } else {
+            status_message = "Cannot move task down - already at bottom";
+            show_success = false;
           }
           return true;
         }
@@ -725,32 +856,22 @@ int main(int argc, char* argv[]) {
         if (event == Event::Character('k') || event == Event::ArrowUp) {
           // Move selected task up
           if (visual_selected_task > 0) {
-            // Check if moving a fixed task up (to earlier position) - make it flexible
+            // Store if task was fixed before movement
             auto& task = manager.getTaskRef(visual_selected_task);
-            if (task.isFixed()) {
-              task.setFixed(); // Remove fixed status
-              status_message = "Fixed task made flexible for movement";
-              show_success = false;
-            }
+            bool wasFixed = task.isFixed();
 
-            if (manager.moveTask(visual_selected_task, visual_selected_task - 1)) {
-              visual_selected_task--;
-              selected_task = visual_selected_task; // Keep cursor on moved task
+            // Use undoable command for movement
+            auto command = std::make_unique<MoveTaskUpCommand>(&manager, visual_selected_task, wasFixed);
+            manager.executeCommand(std::move(command));
 
-              // Recalculate task properties after movement
-              bool hasWarnings = false;
-              auto warnings = manager.calcActLen(hasWarnings);
-              manager.calcStartTimes();
+            visual_selected_task--;
+            selected_task = visual_selected_task; // Keep cursor on moved task
 
-              // Display warnings if any
-              if (hasWarnings && !warnings.empty()) {
-                status_message = "Warning: " + warnings[0];
-                show_success = false;
-              } else if (status_message.empty()) {
-                status_message = "Task moved up";
-                show_success = true;
-              }
-            }
+            status_message = "Task moved up (undo with 'u')";
+            show_success = true;
+          } else {
+            status_message = "Cannot move task up - already at top";
+            show_success = false;
           }
           return true;
         }
@@ -812,27 +933,21 @@ int main(int argc, char* argv[]) {
           show_success = false;
           return true;
         } else if (isColumnEditable(selected_column) && selected_task >= 0 && selected_task < manager.taskSize()) {
-          // For boolean columns (Fixed and Rigid), toggle directly
+          // For boolean columns (Fixed and Rigid), toggle directly using undoable commands
           if (selected_column == 0 || selected_column == 1) {
             auto& task = manager.getTaskRef(selected_task);
             if (selected_column == 0) { // Fixed (fixed-time)
-              task.setFixed(); // Toggle fixed state
+              bool oldFixed = task.isFixed();
+              auto command = std::make_unique<ToggleTaskFixedCommand>(&manager, selected_task, oldFixed);
+              manager.executeCommand(std::move(command));
               status_message = "Fixed-time toggled to " + std::string(task.isFixed() ? "Yes" : "No");
             } else if (selected_column == 1) { // Rigid
-              task.setRigid(!task.isRigid()); // Toggle rigid state
+              bool oldRigid = task.isRigid();
+              auto command = std::make_unique<ToggleTaskRigidCommand>(&manager, selected_task, oldRigid);
+              manager.executeCommand(std::move(command));
               status_message = "Rigid toggled to " + std::string(task.isRigid() ? "Yes" : "No");
             }
             show_success = true;
-            // Recalculate task properties after toggle
-            bool hasWarnings = false;
-            auto warnings = manager.calcActLen(hasWarnings);
-            manager.calcStartTimes();
-
-            // Display warnings if any
-            if (hasWarnings && !warnings.empty()) {
-              status_message = "Warning: " + warnings[0];
-              show_success = false;
-            }
           } else {
             // For other columns, enter edit mode
             edit_mode = true;
@@ -905,11 +1020,16 @@ int main(int argc, char* argv[]) {
       // Handle visual mode entry
       if (event == Event::Character('v')) {
         if (!visual_mode) {
-          // Enter visual mode
-          visual_mode = true;
-          visual_selected_task = selected_task;
-          status_message = "Visual mode - Use j/k to move task, Enter/Esc to exit";
-          show_success = false;
+          // Only enter visual mode if we're on an actual task, not on day length row
+          if (selected_task >= 0 && selected_task < manager.taskSize()) {
+            visual_mode = true;
+            visual_selected_task = selected_task;
+            status_message = "Visual mode - Use j/k to move task, Enter/Esc to exit";
+            show_success = false;
+          } else {
+            status_message = "Cannot enter visual mode on day length row";
+            show_success = false;
+          }
         }
         return true;
       }
@@ -919,27 +1039,20 @@ int main(int argc, char* argv[]) {
         if (first_d_pressed) {
           // Second 'd' pressed - execute deletion
           if (manager.taskSize() > 0 && selected_task >= 0 && selected_task < manager.taskSize()) {
-            std::string deleted_task_name = manager.getTask(selected_task).getName();
-            if (manager.deleteTask(selected_task)) {
-              // Recalculate task properties after deletion
-              bool hasWarnings = false;
-              auto warnings = manager.calcActLen(hasWarnings);
-              manager.calcStartTimes();
+            // Use undo-aware deletion
+            auto deleteCommand = std::make_unique<DeleteTaskCommand>(&manager, selected_task);
+            manager.executeCommand(std::move(deleteCommand));
 
-              // Adjust cursor position
-              if (selected_task >= manager.taskSize()) {
-                selected_task = manager.taskSize() - 1; // Move to last task if we deleted the last one
-              }
-              if (selected_task < 0) {
-                selected_task = 0; // Ensure we don't go negative
-              }
-
-              status_message = "Task '" + deleted_task_name + "' deleted successfully";
-              show_success = true;
-            } else {
-              status_message = "Failed to delete task";
-              show_success = false;
+            // Adjust cursor position
+            if (selected_task >= manager.taskSize()) {
+              selected_task = manager.taskSize() - 1; // Move to last task if we deleted the last one
             }
+            if (selected_task < 0) {
+              selected_task = 0; // Ensure we don't go negative
+            }
+
+            status_message = "Task deleted successfully (undo with 'u')";
+            show_success = true;
           } else {
             status_message = "No task to delete";
             show_success = false;
@@ -957,27 +1070,20 @@ int main(int argc, char* argv[]) {
       if (event == Event::Character('D') && !visual_mode) {
         // Capital D - immediate deletion
         if (manager.taskSize() > 0 && selected_task >= 0 && selected_task < manager.taskSize()) {
-          std::string deleted_task_name = manager.getTask(selected_task).getName();
-          if (manager.deleteTask(selected_task)) {
-            // Recalculate task properties after deletion
-            bool hasWarnings = false;
-            auto warnings = manager.calcActLen(hasWarnings);
-            manager.calcStartTimes();
+          // Use undo-aware deletion
+          auto deleteCommand = std::make_unique<DeleteTaskCommand>(&manager, selected_task);
+          manager.executeCommand(std::move(deleteCommand));
 
-            // Adjust cursor position
-            if (selected_task >= manager.taskSize()) {
-              selected_task = manager.taskSize() - 1; // Move to last task if we deleted the last one
-            }
-            if (selected_task < 0) {
-              selected_task = 0; // Ensure we don't go negative
-            }
-
-            status_message = "Task '" + deleted_task_name + "' deleted successfully";
-            show_success = true;
-          } else {
-            status_message = "Failed to delete task";
-            show_success = false;
+          // Adjust cursor position
+          if (selected_task >= manager.taskSize()) {
+            selected_task = manager.taskSize() - 1; // Move to last task if we deleted the last one
           }
+          if (selected_task < 0) {
+            selected_task = 0; // Ensure we don't go negative
+          }
+
+          status_message = "Task deleted successfully (undo with 'u')";
+          show_success = true;
         } else {
           status_message = "No task to delete";
           show_success = false;

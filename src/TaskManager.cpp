@@ -1,5 +1,6 @@
 #include "TaskManager.h"
 #include "Config.h"
+#include "UndoManager.h"
 
 #include <iostream>
 #include <fstream>
@@ -7,13 +8,14 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <cmath>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 
-TaskManager::TaskManager(int dl) : dayLength(dl), config(nullptr) {}
+TaskManager::TaskManager(int dl) : dayLength(dl), config(nullptr), undoManager(std::make_unique<UndoManager>()) {}
 
-TaskManager::TaskManager(Config* cfg) : config(cfg) {
+TaskManager::TaskManager(Config* cfg) : config(cfg), undoManager(std::make_unique<UndoManager>()) {
   if (config) {
     // Get day length from config (convert hours to minutes)
     double hours = config->getDouble("default-day-length", 7.0);
@@ -205,6 +207,13 @@ bool TaskManager::moveTask(int fromIndex, int toIndex) {
     return false; // Invalid indices or no movement needed
   }
 
+  // Use std::swap for adjacent moves (more reliable)
+  if (abs(toIndex - fromIndex) == 1) {
+    std::swap(tasks[fromIndex], tasks[toIndex]);
+    return true;
+  }
+
+  // For non-adjacent moves, use the traditional approach
   // Store the task to move
   Act taskToMove = tasks[fromIndex];
 
@@ -220,6 +229,20 @@ bool TaskManager::moveTask(int fromIndex, int toIndex) {
   tasks.insert(tasks.begin() + toIndex, taskToMove);
 
   return true;
+}
+
+bool TaskManager::moveTaskUp(int index) {
+  if (index <= 0 || index >= tasks.size()) {
+    return false; // Can't move first task up or invalid index
+  }
+  return moveTask(index, index - 1);
+}
+
+bool TaskManager::moveTaskDown(int index) {
+  if (index < 0 || index >= tasks.size() - 1) {
+    return false; // Can't move last task down or invalid index
+  }
+  return moveTask(index, index + 1);
 }
 
 int TaskManager::getDayLength() const {
@@ -381,4 +404,65 @@ std::string TaskManager::getConfiguredFilename(const std::string& date) const {
   std::string extension = config ? config->getString("file-extension", ".json") : ".json";
 
   return dataDir + "/tasks_" + date + extension;
+}
+
+// Undo/Redo functionality implementation
+void TaskManager::executeCommand(std::unique_ptr<UndoableCommand> command) {
+  if (undoManager) {
+    undoManager->executeCommand(std::move(command));
+  }
+}
+
+bool TaskManager::canUndo() const {
+  return undoManager && undoManager->canUndo();
+}
+
+bool TaskManager::canRedo() const {
+  return undoManager && undoManager->canRedo();
+}
+
+void TaskManager::undo() {
+  if (undoManager) {
+    undoManager->undo();
+    // Recalculate task properties after undo
+    calcActLen();
+    calcStartTimes();
+  }
+}
+
+void TaskManager::redo() {
+  if (undoManager) {
+    undoManager->redo();
+    // Recalculate task properties after redo
+    calcActLen();
+    calcStartTimes();
+  }
+}
+
+std::string TaskManager::getLastUndoDescription() const {
+  if (undoManager) {
+    return undoManager->getLastUndoDescription();
+  }
+  return "";
+}
+
+std::string TaskManager::getLastRedoDescription() const {
+  if (undoManager) {
+    return undoManager->getLastRedoDescription();
+  }
+  return "";
+}
+
+size_t TaskManager::getUndoStackSize() const {
+  if (undoManager) {
+    return undoManager->getUndoStackSize();
+  }
+  return 0;
+}
+
+size_t TaskManager::getRedoStackSize() const {
+  if (undoManager) {
+    return undoManager->getRedoStackSize();
+  }
+  return 0;
 }

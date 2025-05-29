@@ -27,7 +27,7 @@ project(proj
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_executable(proj src/main.cpp src/TaskManager.cpp src/Act.cpp src/Config.cpp)
+add_executable(proj src/main.cpp src/TaskManager.cpp src/Act.cpp src/Config.cpp src/UndoManager.cpp)
 target_include_directories(proj PRIVATE src)
 
 target_link_libraries(proj
