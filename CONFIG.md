@@ -1,8 +1,8 @@
-# Task Manager Configuration Guide
+# Task Planner Configuration Guide
 
 ## Overview
 
-The Task Manager uses a configuration file called `plan.conf` to customize its behavior. This file should be placed in the same directory as the executable.
+The Task Planner uses a configuration file called `plan.conf` to customize its behavior. This file should be placed in the same directory as the executable.
 
 ## Configuration File Format
 
@@ -175,7 +175,7 @@ status-messages: false            # Hide messages
 ## Complete Example Configuration
 
 ```
-# Task Manager Configuration File
+# Task Planner Configuration File
 # Format: key: value
 # Lines starting with # or ; are comments
 
@@ -230,7 +230,7 @@ The application automatically remembers the last opened file:
 ## Tips
 
 1. **Start Simple**: Begin with just the settings you need
-2. **Test Changes**: Run `./proj list` to verify configuration is working
+2. **Test Changes**: Run `./plan list` to verify configuration is working
 3. **Use Comments**: Document your custom settings
 4. **Backup Config**: Keep a backup of your working configuration
 5. **Check Paths**: Ensure data directory paths exist and are writable

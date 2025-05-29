@@ -5,7 +5,7 @@ A terminal-based interactive task planner with vim-like navigation, data persist
 ## Features
 
 - **Interactive UI** - Full-screen terminal interface with vim-like navigation
-- **Task Management** - Create, edit, move, and delete tasks with flexible/fixed scheduling
+- **Task Planning** - Create, edit, move, and delete tasks with flexible/fixed scheduling
 - **Data Persistence** - Automatic saving with JSON format for easy editing
 - **Session Memory** - Automatically reopens the last used file on startup
 - **Configuration** - Customizable settings via `plan.conf` file
@@ -15,13 +15,6 @@ A terminal-based interactive task planner with vim-like navigation, data persist
 ## Quick Start
 
 ### 1. Download and Build
-
-**Required:**
-- C++17 compatible compiler (GCC 8+, Clang 7+, MSVC 2019+)
-- CMake 3.11 or higher
-- Git (for downloading dependencies)
-
-### 2. Download and Build
 
 ```bash
 # Clone or download the source code
@@ -39,7 +32,7 @@ make  # or 'cmake --build .' on Windows
 # The executable will be created as 'plan'
 ```
 
-### 3. First Run
+### 2. First Run
 
 ```bash
 # Test the application
@@ -151,9 +144,3 @@ task-planner/
 ├── CONFIG.md                 # Configuration documentation
 └── README.md                 # This file
 ```
-
-## Dependencies
-- **FTXUI** - Terminal UI library (auto-downloaded)
-- **nlohmann/json** - JSON parsing (auto-downloaded)
-
-The build system automatically downloads and builds all dependencies.
