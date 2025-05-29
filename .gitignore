@@ -2,3 +2,5 @@ build/
 .cache/
 CMakeFiles/
 *.sh
+src/.editorconfig
+src/.clang-format

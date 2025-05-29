@@ -20,17 +20,17 @@ FetchContent_MakeAvailable(json)
 
 # ------------------------------------------------------------------------------
 
-project(proj
+project(plan
   LANGUAGES CXX
   VERSION 1.0.0
 )
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_executable(proj src/main.cpp src/TaskManager.cpp src/Act.cpp src/Config.cpp src/UndoManager.cpp)
-target_include_directories(proj PRIVATE src)
+add_executable(plan src/main.cpp src/TaskManager.cpp src/Act.cpp src/Config.cpp src/UndoManager.cpp)
+target_include_directories(plan PRIVATE src)
 
-target_link_libraries(proj
+target_link_libraries(plan
   PRIVATE ftxui::screen
   PRIVATE ftxui::dom
   PRIVATE ftxui::component
